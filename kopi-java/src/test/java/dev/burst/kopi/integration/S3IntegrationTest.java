@@ -146,7 +146,7 @@ class S3IntegrationTest {
             String tid = Session.taskId(i);
             ResultPayload rp = new ResultPayload(
                     List.of(IntNode.valueOf(i * 2)),
-                    List.of((String) null)
+                    java.util.Arrays.asList((String) null)
             );
             s3.putObject(
                     PutObjectRequest.builder()
