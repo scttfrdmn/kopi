@@ -24,6 +24,7 @@ public class MapOptions {
     private double maxCost;
     private int timeoutSeconds;
     private String region;
+    private String arch = "amd64";
 
     private MapOptions() {}
 
@@ -80,6 +81,12 @@ public class MapOptions {
         return this;
     }
 
+    /** CPU architecture for Fargate workers: {@code "amd64"} (default) or {@code "arm64"} (Graviton). */
+    public MapOptions arch(String arch) {
+        this.arch = arch;
+        return this;
+    }
+
     // --- getters ---
 
     public int getWorkers() { return workers; }
@@ -90,4 +97,5 @@ public class MapOptions {
     public double getMaxCost() { return maxCost; }
     public int getTimeoutSeconds() { return timeoutSeconds; }
     public String getRegion() { return region; }
+    public String getArch() { return arch; }
 }

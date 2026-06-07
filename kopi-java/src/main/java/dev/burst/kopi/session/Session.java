@@ -93,6 +93,8 @@ public final class Session {
         int timeoutSeconds = opts.getTimeoutSeconds();
         String region = (opts.getRegion() != null && !opts.getRegion().isBlank())
                 ? opts.getRegion() : cfg.getRegion();
+        String arch = (opts.getArch() != null && !opts.getArch().isBlank())
+                ? opts.getArch() : "amd64";
 
         // Cost preflight
         double costPerHour = estimateCostPerHour(cpu, memoryGb, workers);
@@ -126,7 +128,7 @@ public final class Session {
 
             // Launch ECS workers
             launchWorkers(ecs, ec2, cfg, sessionId, fnName, nChunks,
-                    workers, cpu, memoryGb, spot, region);
+                    workers, cpu, memoryGb, spot, region, arch);
             LOG.info("kopi workers launched");
 
             // Poll until done
@@ -298,7 +300,8 @@ public final class Session {
             int cpu,
             int memoryGb,
             boolean spot,
-            String region) throws KopiException {
+            String region,
+            String arch) throws KopiException {
 
         String family = "burst-" + sessionId;
         String cpuStr = String.valueOf(cpu * 1024);
@@ -320,6 +323,15 @@ public final class Session {
                 .image(imageUri)
                 .essential(true)
                 .environment(staticEnv)
+                .logConfiguration(LogConfiguration.builder()
+                        .logDriver(LogDriver.AWSLOGS)
+                        .options(Map.of(
+                                "awslogs-group", "/burst/workers",
+                                "awslogs-region", region,
+                                "awslogs-stream-prefix", "burst",
+                                "awslogs-create-group", "true"
+                        ))
+                        .build())
                 .build();
 
         RegisterTaskDefinitionRequest regReq = RegisterTaskDefinitionRequest.builder()
@@ -331,6 +343,12 @@ public final class Session {
                 .executionRoleArn(cfg.getExecutionRoleArn())
                 .taskRoleArn(cfg.getTaskRoleArn())
                 .containerDefinitions(containerDef)
+                .runtimePlatform(RuntimePlatform.builder()
+                        .cpuArchitecture("arm64".equals(arch)
+                                ? software.amazon.awssdk.services.ecs.model.CPUArchitecture.ARM64
+                                : software.amazon.awssdk.services.ecs.model.CPUArchitecture.X86_64)
+                        .operatingSystemFamily(software.amazon.awssdk.services.ecs.model.OSFamily.LINUX)
+                        .build())
                 .build();
 
         RegisterTaskDefinitionResponse regResp;
@@ -651,10 +669,10 @@ public final class Session {
     private static S3AsyncClient buildS3Client(String region) {
         String endpointUrl = System.getenv("AWS_ENDPOINT_URL");
         var builder = S3AsyncClient.builder()
-                .region(Region.of(region));
+                .region(Region.of(region))
+                .forcePathStyle(true);  // avoid 301 redirects on regional buckets
         if (endpointUrl != null && !endpointUrl.isBlank()) {
-            builder.endpointOverride(URI.create(endpointUrl))
-                   .forcePathStyle(true);
+            builder.endpointOverride(URI.create(endpointUrl));
         }
         return builder.build();
     }
