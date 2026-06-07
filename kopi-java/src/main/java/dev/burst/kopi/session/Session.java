@@ -3,6 +3,7 @@ package dev.burst.kopi.session;
 import dev.burst.kopi.KopiException;
 import dev.burst.kopi.MapOptions;
 import dev.burst.kopi.PartialException;
+import dev.burst.kopi.PartialResult;
 import dev.burst.kopi.config.Config;
 import dev.burst.kopi.serialize.ResultPayload;
 import dev.burst.kopi.serialize.TaskPayload;
@@ -153,6 +154,87 @@ public final class Session {
             throw e;
         } catch (Exception e) {
             throw new KopiException("session failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Tolerant variant of {@link #runSession}: never throws {@link PartialException}.
+     * Returns one {@link PartialResult} per input item — successful items carry their
+     * value; failed items carry an error message.
+     *
+     * @param cfg        resolved configuration
+     * @param items      serialized input items
+     * @param fnName     registered function name
+     * @param resultType output class for deserialization
+     * @param opts       map options (workers, CPU, memory, etc.)
+     * @param <U>        result type
+     * @return ordered list of per-item results
+     * @throws KopiException on infrastructure failures (not on item-level errors)
+     */
+    public static <U> List<PartialResult<U>> runSessionTolerant(
+            Config cfg,
+            List<JsonNode> items,
+            String fnName,
+            Class<U> resultType,
+            MapOptions opts) throws KopiException {
+
+        // Resolve options from config defaults
+        int workers = opts.getWorkers() > 0 ? opts.getWorkers() : cfg.getDefaultWorkers();
+        int cpu = opts.getCpu() > 0 ? opts.getCpu() : cfg.getDefaultCpu();
+        int memoryGb = opts.getMemoryGb() > 0 ? opts.getMemoryGb() : cfg.getDefaultMemoryGb();
+        String backend = (opts.getBackend() != null && !opts.getBackend().isBlank())
+                ? opts.getBackend() : cfg.getBackend();
+        boolean spot = opts.isSpot() || cfg.isSpot();
+        double maxCost = opts.getMaxCost() > 0.0 ? opts.getMaxCost() : cfg.getMaxCostPerJob();
+        int timeoutSeconds = opts.getTimeoutSeconds();
+        String region = (opts.getRegion() != null && !opts.getRegion().isBlank())
+                ? opts.getRegion() : cfg.getRegion();
+        String arch = (opts.getArch() != null && !opts.getArch().isBlank())
+                ? opts.getArch() : "amd64";
+
+        // Cost preflight
+        double costPerHour = estimateCostPerHour(cpu, memoryGb, workers);
+        if (maxCost > 0.0 && costPerHour > maxCost) {
+            throw new KopiException(String.format(
+                    "estimated cost %.4f $/hr exceeds limit %.4f $/hr",
+                    costPerHour, maxCost));
+        }
+
+        String sessionId = SessionId.generateJava();
+        LOG.info("kopi tolerant session starting: session={} fn={} items={}", sessionId, fnName, items.size());
+
+        S3AsyncClient s3 = buildS3Client(region);
+        EcsClient ecs = buildEcsClient(region);
+        Ec2Client ec2 = buildEc2Client(region);
+
+        List<List<JsonNode>> chunks = chunkItems(items, workers);
+        int nChunks = chunks.size();
+
+        try {
+            uploadTasks(s3, cfg.getS3Bucket(), sessionId, fnName, chunks);
+            Manifest manifest = buildManifest(sessionId, nChunks, workers, cpu, memoryGb,
+                    backend, spot, region, costPerHour);
+            writeManifest(s3, cfg.getS3Bucket(), manifest);
+            launchWorkers(ecs, ec2, cfg, sessionId, fnName, nChunks,
+                    workers, cpu, memoryGb, spot, region, arch);
+
+            long deadlineMs = timeoutSeconds > 0
+                    ? System.currentTimeMillis() + (long) timeoutSeconds * 1000L
+                    : Long.MAX_VALUE;
+            pollUntilDone(s3, cfg.getS3Bucket(), sessionId, nChunks, deadlineMs);
+
+            List<ResultPayload> payloads = downloadResults(s3, cfg.getS3Bucket(), sessionId, nChunks);
+
+            final S3AsyncClient s3Cleanup = s3;
+            CompletableFuture.runAsync(() ->
+                    cleanupTaskFiles(s3Cleanup, cfg.getS3Bucket(), sessionId, nChunks));
+
+            return flattenResultsTolerant(payloads, resultType);
+
+        } catch (KopiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new KopiException("tolerant session failed: " + e.getMessage(), e);
         }
     }
 
@@ -653,6 +735,40 @@ public final class Session {
         }
 
         return (List<U>) allResults;
+    }
+
+    /**
+     * Tolerant variant: never throws {@link PartialException}.
+     * Returns one {@link PartialResult} per item — success or failure.
+     */
+    @SuppressWarnings("unchecked")
+    public static <U> List<PartialResult<U>> flattenResultsTolerant(
+            List<ResultPayload> payloads, Class<U> resultType) throws KopiException {
+
+        List<PartialResult<U>> out = new ArrayList<>();
+
+        for (ResultPayload payload : payloads) {
+            List<JsonNode> results = payload.getResults();
+            List<String> errors = payload.getErrors();
+            int n = results.size();
+            for (int i = 0; i < n; i++) {
+                String err = (errors != null && i < errors.size()) ? errors.get(i) : null;
+                boolean hasErr = err != null && !err.isBlank();
+                if (hasErr) {
+                    out.add(PartialResult.failure(err));
+                } else {
+                    JsonNode node = results.get(i);
+                    try {
+                        U value = MAPPER.treeToValue(node, resultType);
+                        out.add(PartialResult.success(value));
+                    } catch (Exception e) {
+                        out.add(PartialResult.failure("deserialization error: " + e.getMessage()));
+                    }
+                }
+            }
+        }
+
+        return out;
     }
 
     // ---------- Cost estimation ----------

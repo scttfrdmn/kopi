@@ -4,6 +4,7 @@ import dev.burst.kopi.config.Config;
 import dev.burst.kopi.registry.FunctionRegistry;
 import dev.burst.kopi.session.Session;
 import dev.burst.kopi.worker.Worker;
+import dev.burst.kopi.PartialResult;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -123,5 +124,51 @@ public final class Kopi {
             List<T> items,
             Class<U> resultType) throws KopiException {
         return map(fnName, items, resultType, MapOptions.defaults());
+    }
+
+    /**
+     * Like {@link #map} but never throws {@link PartialException}.
+     * Returns one {@link PartialResult} per input item — successful items carry their
+     * value; failed items carry an error message.
+     *
+     * @param fnName     name of the registered function
+     * @param items      list of items to process
+     * @param resultType class of the result type
+     * @param opts       options (workers, CPU, memory, etc.)
+     * @param <T>        input item type
+     * @param <U>        result type
+     * @return ordered list of per-item results
+     * @throws KopiException on infrastructure failures (not on item-level errors)
+     */
+    public static <T, U> List<PartialResult<U>> mapTolerant(
+            String fnName,
+            List<T> items,
+            Class<U> resultType,
+            MapOptions opts) throws KopiException {
+        Config cfg;
+        try {
+            cfg = Config.load();
+        } catch (Exception e) {
+            throw new KopiException("failed to load burst config: " + e.getMessage(), e);
+        }
+
+        List<JsonNode> itemNodes = new java.util.ArrayList<>();
+        for (T item : items) {
+            itemNodes.add(MAPPER.valueToTree(item));
+        }
+
+        return Session.runSessionTolerant(cfg, itemNodes, fnName, resultType, opts);
+    }
+
+    /**
+     * Like {@link #map} but never throws {@link PartialException}, using default options.
+     *
+     * @see #mapTolerant(String, List, Class, MapOptions)
+     */
+    public static <T, U> List<PartialResult<U>> mapTolerant(
+            String fnName,
+            List<T> items,
+            Class<U> resultType) throws KopiException {
+        return mapTolerant(fnName, items, resultType, MapOptions.defaults());
     }
 }
