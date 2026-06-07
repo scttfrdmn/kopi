@@ -1,0 +1,4 @@
+allprojects {
+    group = 'dev.burst'
+    version = '0.1.0'
+}

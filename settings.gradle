@@ -1,0 +1,2 @@
+rootProject.name = 'kopi'
+include 'kopi-java', 'kopi-scala'
