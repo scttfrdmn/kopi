@@ -15,9 +15,9 @@ Cloud bursting for Java and Scala — distributed parallel map via AWS ECS/Farga
 
 ```kotlin
 dependencies {
-    implementation("dev.burst:kopi-java:0.1.0")
+    implementation("dev.burstcore:kopi:0.2.0")
     // For Scala projects:
-    implementation("dev.burst:kopi-scala:0.1.0")
+    implementation("dev.burstcore:kopi-scala:0.2.0")
 }
 ```
 
@@ -25,9 +25,9 @@ dependencies {
 
 ```xml
 <dependency>
-    <groupId>dev.burst</groupId>
-    <artifactId>kopi-java</artifactId>
-    <version>0.1.0</version>
+    <groupId>dev.burstcore</groupId>
+    <artifactId>kopi</artifactId>
+    <version>0.2.0</version>
 </dependency>
 ```
 

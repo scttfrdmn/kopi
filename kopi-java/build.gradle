@@ -3,6 +3,9 @@ plugins {
     id 'jacoco'
 }
 
+// Published artifact name: dev.burstcore:kopi (not kopi-java)
+base.archivesName = 'kopi'
+
 java {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
